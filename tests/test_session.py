@@ -1,19 +1,16 @@
 """Tests for session state management."""
 from __future__ import annotations
 
-import json
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import pytest
 from unittest.mock import patch
-from pathlib import Path
 
 from jira_architect.session import (
-    Session, create_session, append_notification, read_notifications, PHASES
+    Session, create_session, append_notification, read_notifications
 )
 
 

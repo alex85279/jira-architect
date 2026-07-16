@@ -6,7 +6,6 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-import pytest
 from jira_architect.progress import build_design_comment, build_progress_comment
 from jira_architect.models import GitInfo
 
