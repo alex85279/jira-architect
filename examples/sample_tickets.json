@@ -1,0 +1,58 @@
+{
+  "project_key": "PROJ",
+  "root_keys": ["PROJ-42"],
+  "issues": [
+    {
+      "key": "PROJ-42",
+      "summary": "使用者認證系統",
+      "description": "實作完整的使用者登入、登出、JWT token 管理功能，支援 Email/password 登入與 OAuth2 (Google)。",
+      "issue_type": "Epic",
+      "status": "In Progress",
+      "priority": "High",
+      "labels": ["auth", "backend"],
+      "assignee": null,
+      "parent_key": null,
+      "jira_url": "https://yourcompany.atlassian.net/browse/PROJ-42",
+      "children": []
+    },
+    {
+      "key": "PROJ-43",
+      "summary": "作為使用者，我希望能用 Email/password 登入，以便存取系統",
+      "description": "實作 Email + password 登入流程，包含輸入驗證、密碼 bcrypt hash 比對、JWT access/refresh token 發放。",
+      "issue_type": "Story",
+      "status": "To Do",
+      "priority": "High",
+      "labels": ["auth", "backend"],
+      "assignee": null,
+      "parent_key": "PROJ-42",
+      "jira_url": "https://yourcompany.atlassian.net/browse/PROJ-43",
+      "children": []
+    },
+    {
+      "key": "PROJ-44",
+      "summary": "設計 POST /api/auth/login endpoint",
+      "description": "接受 { email, password }，驗證後回傳 { accessToken, refreshToken }。access token 30 分鐘過期，refresh token 7 天。",
+      "issue_type": "Sub-task",
+      "status": "To Do",
+      "priority": "High",
+      "labels": ["backend"],
+      "assignee": null,
+      "parent_key": "PROJ-43",
+      "jira_url": "https://yourcompany.atlassian.net/browse/PROJ-44",
+      "children": []
+    },
+    {
+      "key": "PROJ-45",
+      "summary": "作為使用者，我希望能登出並讓 token 失效",
+      "description": "實作登出 API，將 refresh token 加入黑名單（Redis），access token 設短效期自然過期。",
+      "issue_type": "Story",
+      "status": "To Do",
+      "priority": "Medium",
+      "labels": ["auth", "backend"],
+      "assignee": null,
+      "parent_key": "PROJ-42",
+      "jira_url": "https://yourcompany.atlassian.net/browse/PROJ-45",
+      "children": []
+    }
+  ]
+}

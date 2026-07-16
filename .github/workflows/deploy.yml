@@ -1,0 +1,28 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, hermes-host]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync skill package into hermes-agent external skills dir
+        run: |
+          set -euo pipefail
+          CONTAINER=hermes-gateway
+          DEST=/opt/data/external-skills/jira-architect
+          docker exec "$CONTAINER" mkdir -p "$DEST"
+          tar --exclude='.git' --exclude='.github' -cf - . \
+            | docker exec -i "$CONTAINER" sh -c "rm -rf '$DEST'/* && tar -xf - -C '$DEST'"
+
+      - name: Restart the gateway to pick up the change
+        run: |
+          set -euo pipefail
+          docker exec hermes-gateway hermes gateway restart
