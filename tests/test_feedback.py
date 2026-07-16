@@ -6,7 +6,6 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-import pytest
 from jira_architect.feedback import extract_directives, is_hermes_comment, scan_comments
 from jira_architect.models import FeedbackItem
 

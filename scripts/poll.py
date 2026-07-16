@@ -28,7 +28,7 @@ import requests
 from jira_architect import config as cfg_mod
 from jira_architect.jira_client import JiraClient
 from jira_architect.feedback import scan_comments
-from jira_architect.session import Session, append_notification, read_notifications
+from jira_architect.session import Session, append_notification
 
 
 def _now_iso() -> str:

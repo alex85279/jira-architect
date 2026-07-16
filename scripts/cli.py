@@ -32,7 +32,7 @@ from jira_architect import git_client as git
 from jira_architect.feedback import scan_comments
 from jira_architect.progress import build_design_comment, build_progress_comment
 from jira_architect.session import (
-    Session, create_session, read_notifications, PHASES, SESSION_DIR,
+    Session, create_session, read_notifications, PHASES,
 )
 
 
@@ -226,7 +226,7 @@ def cmd_git_commit(args) -> None:
     print(f"Switching to branch: {args.branch}")
     git.ensure_branch(repo_path, args.branch)
 
-    print(f"Committing all changes...")
+    print("Committing all changes...")
     commit_hash = git.commit_all(repo_path, args.message)
     commit_short = commit_hash[:8]
     print(f"Committed: {commit_short}")
@@ -297,7 +297,7 @@ def cmd_session_start(args) -> None:
     print(f"   Label   : {sess.label}")
     print(f"   Tickets : {', '.join(ticket_keys)}")
     print(f"   Phase   : {sess.phase}")
-    print(f"   Polling : every 2h via cron (run install-cron.sh to activate)")
+    print("   Polling : every 2h via cron (run install-cron.sh to activate)")
     print(json.dumps(sess.to_dict(), indent=2, ensure_ascii=False))
 
 
