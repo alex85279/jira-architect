@@ -53,27 +53,38 @@ Jira Tickets
 
 ## 快速開始
 
-```bash
-pip install -r requirements.txt
+> **注意：** config、session、polling 都需在 **container 內**（hermes 身份）執行，不是在 host 上直接執行。
 
-# 1. 設定 Jira 連線與 Git repo
-python scripts/cli.py config set \
+```bash
+# 1. 設定 Jira 連線、Git repo 與 Discord Webhook
+docker exec -u hermes hermes-gateway python3 \
+  /opt/data/external-skills/jira-architect/scripts/cli.py config set \
   --url "https://yourcompany.atlassian.net" \
   --email "user@company.com" \
   --token "YOUR_JIRA_API_TOKEN" \
   --project "PROJ" \
-  --git-repo "/path/to/your/local/repo" \
-  --webhook "https://discord.com/api/webhooks/xxx/yyy"  # 選配
+  --webhook "https://discord.com/api/webhooks/..."   # Discord 頻道 Webhook
 
 # 2. 測試連線
-python scripts/cli.py config test
+docker exec -u hermes hermes-gateway python3 \
+  /opt/data/external-skills/jira-architect/scripts/cli.py config test
 
 # 3. 安裝 cron job（每台機器只需執行一次）
-bash install-cron.sh
+POLL_CMD="0 */2 * * * docker exec -u hermes hermes-gateway python3 /opt/data/external-skills/jira-architect/scripts/poll.py --once >> /tmp/jira-architect-poll.log 2>&1"
+(crontab -l 2>/dev/null | grep -v "jira-architect"; echo "$POLL_CMD") | crontab -
 
-# 4. 抓取 tickets 開始工作
-python scripts/cli.py fetch --epic PROJ-42 --output /tmp/ja-tickets.json
+# 4. 手動測試一次 polling
+docker exec -u hermes hermes-gateway python3 \
+  /opt/data/external-skills/jira-architect/scripts/poll.py --once --verbose
+
+# 5. 開始使用：抓取 tickets
+docker exec -u hermes hermes-gateway python3 \
+  /opt/data/external-skills/jira-architect/scripts/cli.py \
+  fetch --epic PROJ-42 --output /tmp/ja-tickets.json
 ```
+
+**config 儲存位置（container 內）：** `/opt/data/.hermes/jira-architect.json`  
+**Sessions & 通知（container 內）：** `/opt/data/.hermes/jira-architect/`
 
 ---
 
@@ -257,28 +268,32 @@ python scripts/cli.py session close --id a1b2c3d4
 
 ### 安裝 cron job
 
+在 **host** 上執行（一次即可）：
+
 ```bash
-bash install-cron.sh
+POLL_CMD="0 */2 * * * docker exec -u hermes hermes-gateway python3 /opt/data/external-skills/jira-architect/scripts/poll.py --once >> /tmp/jira-architect-poll.log 2>&1"
+(crontab -l 2>/dev/null | grep -v "jira-architect"; echo "$POLL_CMD") | crontab -
 ```
 
-安裝後 cron 每 2 小時執行 `scripts/poll.py`。效果：
+安裝後 cron 每 2 小時透過 `docker exec` 在 container 內執行 `poll.py`。效果：
 - 掃描所有 active sessions 的 Jira tickets
 - 將新的 `@hermes` 留言寫入 `~/.hermes/jira-architect/notifications.jsonl`
 - 若設定了 Discord Webhook，主動推送通知
 
 驗證安裝：
 ```bash
-crontab -l | grep poll
+crontab -l | grep "jira-architect"
 ```
 
 查看 log：
 ```bash
-tail -f ~/.hermes/jira-architect/poll.log
+tail -f /tmp/jira-architect-poll.log
 ```
 
 手動執行一次（測試用）：
 ```bash
-python3 scripts/poll.py --once --verbose
+docker exec -u hermes hermes-gateway python3 \
+  /opt/data/external-skills/jira-architect/scripts/poll.py --once --verbose
 ```
 
 ### Discord Webhook（選配）
@@ -286,10 +301,13 @@ python3 scripts/poll.py --once --verbose
 在設定時加入 webhook URL，有新 feedback 時會主動推送 Discord：
 
 ```bash
-python scripts/cli.py config set \
+docker exec -u hermes hermes-gateway python3 \
+  /opt/data/external-skills/jira-architect/scripts/cli.py config set \
   ... \
   --webhook "https://discord.com/api/webhooks/CHANNEL_ID/TOKEN"
 ```
+
+建立 Webhook 步驟：Discord → 頻道右鍵 → **編輯頻道** → **整合** → **Webhooks** → **新增 Webhook** → 複製 URL
 
 Discord 頻道會收到：
 ```
