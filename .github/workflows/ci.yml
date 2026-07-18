@@ -22,6 +22,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest ruff
 
+      - name: Configure git identity (required for git commit tests)
+        run: |
+          git config --global user.email "ci@hermes-test.local"
+          git config --global user.name "Hermes CI"
+
       - name: Lint
         run: ruff check scripts/ tests/
 
