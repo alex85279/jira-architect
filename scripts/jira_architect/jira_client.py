@@ -242,6 +242,60 @@ class JiraClient:
             )
         return resp.json()["id"]
 
+    # ------------------------------------------------------------------
+    # Remote links (used to link a GitHub repo to a ticket)
+    # ------------------------------------------------------------------
+
+    def get_remote_links(self, issue_key: str) -> List[Dict]:
+        resp = requests.get(
+            f"{self._base}/issue/{issue_key}/remotelink",
+            headers=self._headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def add_remote_link(
+        self, issue_key: str, url: str, title: str, global_id: str, summary: str = ""
+    ) -> None:
+        """Attach a web link to an issue. Posting again with the same
+        `global_id` updates the existing link instead of duplicating it.
+        """
+        payload = {
+            "globalId": global_id,
+            "application": {"type": "com.hermes.jira-architect", "name": "Hermes"},
+            "relationship": "is implemented by",
+            "object": {
+                "url": url,
+                "title": title,
+                "summary": summary,
+                "icon": {
+                    "url16x16": "https://github.githubassets.com/favicons/favicon.png",
+                    "title": "GitHub",
+                },
+            },
+        }
+        resp = requests.post(
+            f"{self._base}/issue/{issue_key}/remotelink",
+            headers=self._headers,
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Failed to add remote link on {issue_key} "
+                f"({resp.status_code}): {resp.text[:300]}"
+            )
+
+    def find_repo_link(self, issue_key: str) -> Optional[str]:
+        """Return the repo URL already linked to `issue_key` via
+        `add_remote_link`, or None if the ticket has no linked repo yet.
+        """
+        for link in self.get_remote_links(issue_key):
+            if str(link.get("globalId", "")).startswith("hermes-repo:"):
+                return link.get("object", {}).get("url")
+        return None
+
     def get_comments(self, issue_key: str, since_iso: Optional[str] = None) -> List[Dict]:
         """Return comments as dicts with 'id', 'author', 'created', 'body_text' keys."""
         resp = requests.get(

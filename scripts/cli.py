@@ -8,10 +8,11 @@
   config test          — 測試 Jira 連線
 
   fetch                — 從 Jira 抓取 tickets，存成 JSON
+  ensure-repo          — 確認 root ticket 已連結 GitHub repo，沒有的話自動建立並連結
   post-design          — 將架構設計 Markdown 發布到 Jira 作為留言
   check-feedback       — 掃描所有 tickets 的 @hermes 回饋指令
 
-  git-commit           — 建立 branch、commit 並 push
+  git-commit           — 建立 branch、commit 並 push（自動使用 GitHub token 驗證）
   update-progress      — 在所有 tickets 貼進度更新留言（含 Git 資訊）
 
 零 discord / hermes 依賴，可直接在終端機執行。
@@ -22,11 +23,13 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jira_architect import config as cfg_mod
 from jira_architect.jira_client import JiraClient
+from jira_architect.github_client import GitHubClient
 from jira_architect.models import IssueTree, GitInfo
 from jira_architect import git_client as git
 from jira_architect.feedback import scan_comments
@@ -50,6 +53,8 @@ def cmd_config_set(args) -> None:
         git_remote=args.git_remote,
         branch_prefix=args.branch_prefix,
         discord_webhook_url=args.webhook,
+        github_token=args.github_token,
+        workspace_dir=args.workspace_dir,
     )
     print(f"Config saved to {cfg_mod.CONFIG_PATH}")
 
@@ -60,6 +65,11 @@ def cmd_config_show(args) -> None:
         print("No config found. Run: python scripts/cli.py config set --help")
         return
     masked = cfg.token[:4] + "****" + cfg.token[-4:] if len(cfg.token) > 8 else "****"
+    gh_masked = (
+        cfg.github_token[:4] + "****" + cfg.github_token[-4:]
+        if cfg.github_token and len(cfg.github_token) > 8
+        else (cfg.github_token or "(not set)")
+    )
     print(f"Jira URL     : {cfg.url}")
     print(f"Email        : {cfg.email}")
     print(f"Token        : {masked}")
@@ -68,6 +78,8 @@ def cmd_config_show(args) -> None:
     print(f"Git remote   : {cfg.git_remote}")
     print(f"Branch prefix: {cfg.branch_prefix}")
     print(f"Discord wbhk : {cfg.discord_webhook_url or '(not set)'}")
+    print(f"GitHub token : {gh_masked}")
+    print(f"Workspace dir: {cfg.workspace_dir}")
 
 
 def cmd_config_test(args) -> None:
@@ -208,6 +220,89 @@ def cmd_check_feedback(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ensure-repo
+# ---------------------------------------------------------------------------
+
+def _ensure_repo_for_ticket(
+    client: JiraClient,
+    gh: GitHubClient,
+    token: str,
+    root_key: str,
+    issue: dict,
+    workspace_dir: Path,
+    private: bool,
+) -> dict:
+    existing_url = client.find_repo_link(root_key)
+
+    if existing_url:
+        repo_name = existing_url.rstrip("/").removesuffix(".git").split("/")[-1]
+        local_path = str(workspace_dir / repo_name)
+        if not (Path(local_path) / ".git").exists():
+            print(f"🔗 {root_key} already linked to {existing_url} — cloning to {local_path}...")
+            clone_url = existing_url if existing_url.endswith(".git") else existing_url + ".git"
+            git.clone(clone_url, local_path, token=token)
+        else:
+            print(f"🔗 {root_key} already linked to {existing_url} (local copy at {local_path})")
+        return {"ticket": root_key, "repo_url": existing_url, "local_path": local_path, "created": False}
+
+    repo_name = GitHubClient.slug_from_summary(root_key, issue.get("summary", ""))
+    print(f"No repo linked to {root_key} yet. Creating GitHub repo '{repo_name}'...")
+    repo = gh.create_repo(
+        repo_name,
+        description=f"{root_key}: {issue.get('summary', '')}"[:350],
+        private=private,
+        auto_init=True,
+    )
+    repo_url = repo["html_url"]
+    local_path = str(workspace_dir / repo_name)
+    git.clone(GitHubClient.plain_clone_url(repo), local_path, token=token)
+
+    client.add_remote_link(
+        root_key,
+        url=repo_url,
+        title=f"GitHub: {repo['full_name']}",
+        global_id=f"hermes-repo:{root_key}",
+        summary="Repository created and managed automatically by Hermes (jira-architect).",
+    )
+    print(f"✅ Created {repo_url} and linked it to {root_key}")
+    return {"ticket": root_key, "repo_url": repo_url, "local_path": local_path, "created": True}
+
+
+def cmd_ensure_repo(args) -> None:
+    cfg = _require_config()
+    if not cfg.github_token:
+        print(
+            "ERROR: GitHub token not configured. Run:\n"
+            "  python scripts/cli.py config set --github-token <PAT> ... "
+            "(needs 'repo' scope; see https://github.com/settings/tokens)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    client = JiraClient(cfg)
+    gh = GitHubClient(cfg.github_token)
+    tree = _load_tree(args.tickets)
+
+    issues_by_key = {i["key"]: i for i in tree["issues"]}
+    root_keys = tree.get("root_keys") or [tree["issues"][0]["key"]]
+
+    workspace_dir = Path(args.workspace_dir or cfg.workspace_dir).expanduser()
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for root_key in root_keys:
+        issue = issues_by_key.get(root_key) or next(iter(issues_by_key.values()))
+        results.append(
+            _ensure_repo_for_ticket(
+                client, gh, cfg.github_token, root_key, issue, workspace_dir,
+                private=not args.public,
+            )
+        )
+
+    print(json.dumps({"repos": results}, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
 # git-commit
 # ---------------------------------------------------------------------------
 
@@ -233,7 +328,8 @@ def cmd_git_commit(args) -> None:
 
     if args.push:
         print(f"Pushing {args.branch} to {remote}...")
-        git.push(repo_path, remote, args.branch)
+        push_token = args.github_token or (cfg.github_token if cfg else None)
+        git.push(repo_path, remote, args.branch, token=push_token)
         print("Push complete.")
 
     repo_url_raw = git.get_remote_url(repo_path, remote) or repo_path
@@ -397,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     cs.add_argument("--branch-prefix", default="feature/hermes-", help="Branch name prefix")
     cs.add_argument("--webhook", default=None,
                     help="Discord webhook URL for polling notifications (optional)")
+    cs.add_argument("--github-token", default=None,
+                    help="GitHub PAT ('repo' scope) for ensure-repo and authenticated push (optional)")
+    cs.add_argument("--workspace-dir", default=None,
+                    help="Local clone root for repos ensure-repo creates/links "
+                         "(default: ~/.hermes/jira-architect/repos)")
 
     config_sub.add_parser("show", help="Show current config")
     config_sub.add_parser("test", help="Test Jira connection")
@@ -420,6 +521,17 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("--tickets", required=True, help="Tickets JSON path from fetch")
     cf.add_argument("--since", default="", help="ISO 8601 datetime; only scan newer comments")
 
+    # --- ensure-repo ---
+    er = sub.add_parser(
+        "ensure-repo",
+        help="Ensure the ticket's root issue has a linked GitHub repo, creating one if missing",
+    )
+    er.add_argument("--tickets", required=True, help="Tickets JSON path from fetch")
+    er.add_argument("--workspace-dir", default=None,
+                    help="Local clone root (overrides config workspace_dir)")
+    er.add_argument("--public", action="store_true",
+                    help="Create newly-made repos as public (default: private)")
+
     # --- git-commit ---
     gc = sub.add_parser("git-commit", help="Create branch, commit, and optionally push")
     gc.add_argument("--repo", default=None, help="Local repo path (overrides config)")
@@ -427,6 +539,8 @@ def build_parser() -> argparse.ArgumentParser:
     gc.add_argument("--message", required=True, help="Commit message")
     gc.add_argument("--push", action="store_true", help="Push after commit")
     gc.add_argument("--remote", default=None, help="Remote name (overrides config)")
+    gc.add_argument("--github-token", default=None,
+                    help="GitHub PAT for authenticated push (overrides config github_token)")
 
     # --- update-progress ---
     up = sub.add_parser("update-progress", help="Post progress comment to all tickets")
@@ -482,6 +596,8 @@ def main() -> None:
 
     elif args.command == "fetch":
         cmd_fetch(args)
+    elif args.command == "ensure-repo":
+        cmd_ensure_repo(args)
     elif args.command == "post-design":
         cmd_post_design(args)
     elif args.command == "check-feedback":

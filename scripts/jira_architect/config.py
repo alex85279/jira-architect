@@ -23,6 +23,8 @@ class ArchitectConfig:
     git_remote: str = "origin"
     branch_prefix: str = "feature/hermes-"
     discord_webhook_url: Optional[str] = None  # optional: push notifications to Discord
+    github_token: Optional[str] = None         # GitHub PAT with 'repo' scope
+    workspace_dir: str = "~/.hermes/jira-architect/repos"  # local root for cloned repos
 
 
 def load() -> Optional[ArchitectConfig]:
@@ -40,6 +42,8 @@ def load() -> Optional[ArchitectConfig]:
             git_remote=data.get("git_remote", "origin"),
             branch_prefix=data.get("branch_prefix", "feature/hermes-"),
             discord_webhook_url=data.get("discord_webhook_url"),
+            github_token=data.get("github_token"),
+            workspace_dir=data.get("workspace_dir", "~/.hermes/jira-architect/repos"),
         )
     except (KeyError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Malformed config at {CONFIG_PATH}: {exc}") from exc
@@ -54,6 +58,8 @@ def save(
     git_remote: str = "origin",
     branch_prefix: str = "feature/hermes-",
     discord_webhook_url: Optional[str] = None,
+    github_token: Optional[str] = None,
+    workspace_dir: Optional[str] = None,
 ) -> None:
     """Persist config with owner-only read/write permissions."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +74,8 @@ def save(
                 "git_remote": git_remote,
                 "branch_prefix": branch_prefix,
                 "discord_webhook_url": discord_webhook_url,
+                "github_token": github_token,
+                "workspace_dir": workspace_dir or "~/.hermes/jira-architect/repos",
             },
             indent=2,
         )

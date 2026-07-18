@@ -33,6 +33,9 @@ Jira Tickets
     ▼  @hermes approve-arch (Jira 留言)
   ──────────────────────────────────────
     │  (cron 每 2h 偵測)
+    ▼  ensure-repo
+  ticket 沒連結 repo？自動建立 GitHub repo 並連結；已連結則 clone 既有 repo
+    │
     ▼  (Agent 推理)
   生成程式碼，寫入 repo
     │
@@ -56,13 +59,14 @@ Jira Tickets
 > **注意：** config、session、polling 都需在 **container 內**（hermes 身份）執行，不是在 host 上直接執行。
 
 ```bash
-# 1. 設定 Jira 連線、Git repo 與 Discord Webhook
+# 1. 設定 Jira 連線、GitHub token 與 Discord Webhook
 docker exec -u hermes hermes-gateway python3 \
   /opt/data/external-skills/jira-architect/scripts/cli.py config set \
   --url "https://yourcompany.atlassian.net" \
   --email "user@company.com" \
   --token "YOUR_JIRA_API_TOKEN" \
   --project "PROJ" \
+  --github-token "YOUR_GITHUB_PAT" \                 # repo scope；ensure-repo 建立/連結 repo 用
   --webhook "https://discord.com/api/webhooks/..."   # Discord 頻道 Webhook
 
 # 2. 測試連線
@@ -190,15 +194,26 @@ python scripts/cli.py session update-phase --id a1b2c3d4 --phase awaiting_impl
 
 ---
 
-### 步驟五：程式實作（Agent 推理）
+### 步驟五：確認/建立 Repo，程式實作（Agent 推理）
 
-Agent 根據已確認的架構設計，直接在 git repo 目錄中建立/修改程式碼。
+先確認 root ticket 是否已連結 GitHub repo，沒有的話自動建立並連結：
 
-實作完成後 commit 並 push：
+```bash
+python scripts/cli.py ensure-repo --tickets /tmp/ja-tickets.json
+```
+
+- **已連結** → clone 既有 repo 到本地 workspace（若尚未 clone）
+- **未連結** → 自動建立 GitHub repo（預設 private）、clone 到本地，並以 Jira remote link 連結回 ticket
+
+輸出的 `local_path` 即為本次實作的 repo 目錄。
+
+Agent 根據已確認的架構設計，直接在該 repo 目錄中建立/修改程式碼。
+
+實作完成後 commit 並 push（`--push` 自動用 config 的 GitHub token 驗證）：
 
 ```bash
 python scripts/cli.py git-commit \
-  --repo "/path/to/repo" \
+  --repo "{local_path}" \
   --branch "feature/hermes-PROJ-42-user-auth" \
   --message "feat(PROJ-42): implement user authentication system" \
   --push
@@ -377,7 +392,9 @@ python scripts/cli.py config set \
   [--git-repo "/path/to/repo"] \
   [--git-remote "origin"] \
   [--branch-prefix "feature/hermes-"] \
-  [--webhook "https://discord.com/api/webhooks/..."]
+  [--webhook "https://discord.com/api/webhooks/..."] \
+  [--github-token "YOUR_GITHUB_PAT"] \
+  [--workspace-dir "~/.hermes/jira-architect/repos"]
 
 # 顯示目前設定（token 遮罩）
 python scripts/cli.py config show
@@ -408,6 +425,17 @@ python scripts/cli.py post-design \
 
 將架構設計 Markdown 發布到 root-level tickets 作為 Jira 留言，附上回饋指引。
 
+### `ensure-repo`
+
+```bash
+python scripts/cli.py ensure-repo \
+  --tickets /tmp/ja-tickets.json \
+  [--workspace-dir "~/.hermes/jira-architect/repos"] \
+  [--public]
+```
+
+檢查每個 root ticket 是否已連結 GitHub repo（透過 Jira remote link）：已連結則 clone 到本地 workspace；未連結則自動建立新 repo（預設 private）、clone 並連結回 ticket。輸出包含 `repo_url`、`local_path`、`created` 的 JSON。需要先在 config 設定 `--github-token`。
+
 ### `check-feedback`
 
 ```bash
@@ -426,10 +454,11 @@ python scripts/cli.py git-commit \
   --message "feat(PROJ-42): implement auth" \
   [--repo "/path/to/repo"] \
   [--remote "origin"] \
-  [--push]
+  [--push] \
+  [--github-token "YOUR_GITHUB_PAT"]
 ```
 
-建立 branch（若不存在）、stage all、commit，選擇性 push。輸出 Git 資訊 JSON。
+建立 branch（若不存在）、stage all、commit，選擇性 push。`--push` 時預設用 config 的 `github_token` 驗證（可用 `--github-token` 覆蓋），token 只透過單次指令的 `-c http.extraheader` 傳遞，不會寫入 `.git/config`。輸出 Git 資訊 JSON。
 
 ### `update-progress`
 
@@ -495,8 +524,9 @@ jira-architect/
 │   ├── poll.py                     — cron 定時 polling 腳本（每 2h）
 │   └── jira_architect/
 │       ├── config.py               — 設定讀寫（~/.hermes/jira-architect.json）
-│       ├── jira_client.py          — Jira REST API v3（fetch/comment/ADF）
-│       ├── git_client.py           — Git 操作 wrapper
+│       ├── jira_client.py          — Jira REST API v3（fetch/comment/ADF/remote link）
+│       ├── github_client.py        — GitHub REST API（建立 repo、查詢）
+│       ├── git_client.py           — Git 操作 wrapper（含 clone、token 驗證 push）
 │       ├── models.py               — Pydantic 資料模型
 │       ├── feedback.py             — @hermes 指令解析器
 │       ├── progress.py             — 留言格式化器

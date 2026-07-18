@@ -5,6 +5,8 @@ They raise RuntimeError with a human-readable message on failure.
 """
 from __future__ import annotations
 
+import base64
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -31,6 +33,31 @@ def _resolve_repo(repo_path: str) -> str:
     if not (p / ".git").exists():
         raise RuntimeError(f"No git repository found at: {p}")
     return str(p)
+
+
+def _inject_token(url: str, token: Optional[str]) -> str:
+    """Embed a GitHub PAT into an HTTPS URL for credential-free push/clone.
+
+    https://github.com/org/repo.git  →  https://x-access-token:<token>@github.com/org/repo.git
+    """
+    if not token or not url.startswith("https://"):
+        return url
+    # Strip any existing embedded credentials first
+    url = re.sub(r"https://[^@]+@", "https://", url)
+    return url.replace("https://", f"https://x-access-token:{token}@", 1)
+
+
+def _auth_header_arg(token: str) -> str:
+    """Return a git -c argument that sets an Authorization header for HTTPS operations.
+
+    The resulting string can be passed as the value to `git -c <value> <cmd>` to
+    authenticate without modifying any persistent git config or embedding the
+    token in the remote URL.
+
+    Format: http.extraheader=AUTHORIZATION: basic <base64(x-access-token:token)>
+    """
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return f"http.extraheader=AUTHORIZATION: basic {encoded}"
 
 
 def ensure_branch(repo_path: str, branch: str) -> None:
@@ -62,9 +89,12 @@ def commit_all(repo_path: str, message: str) -> str:
     return get_head_commit(repo_path)
 
 
-def push(repo_path: str, remote: str, branch: str) -> None:
+def push(repo_path: str, remote: str, branch: str, token: Optional[str] = None) -> None:
     cwd = _resolve_repo(repo_path)
-    _run(["git", "push", remote, branch], cwd=cwd)
+    if token:
+        _run(["git", "-c", _auth_header_arg(token), "push", remote, branch], cwd=cwd)
+    else:
+        _run(["git", "push", remote, branch], cwd=cwd)
 
 
 def get_head_commit(repo_path: str) -> str:
@@ -84,6 +114,23 @@ def get_remote_url(repo_path: str, remote: str = "origin") -> Optional[str]:
         return url if url else None
     except RuntimeError:
         return None
+
+
+def clone(clone_url: str, local_path: str, token: Optional[str] = None) -> None:
+    """Clone clone_url into local_path (skips silently if already cloned)."""
+    p = Path(local_path).resolve()
+    if (p / ".git").exists():
+        return  # already cloned
+    p.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["git"]
+    if token:
+        cmd += ["-c", _auth_header_arg(token)]
+    cmd += ["clone", clone_url, str(p)]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git clone failed:\n{result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 def normalize_repo_url(url: str) -> str:

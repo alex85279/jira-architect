@@ -42,9 +42,10 @@ python scripts/cli.py config show
 - Jira URL（例如 `https://yourcompany.atlassian.net`）
 - Jira 帳號 Email 和 API Token（在 https://id.atlassian.com/manage-profile/security/api-tokens 建立）
 - 預設 Project Key
-- 本地 Git repo 路徑
+- （選用）本地 Git repo 路徑 — 若不提供，未連結 repo 的 ticket 會由 `ensure-repo` 自動建立
 - Git remote 名稱（預設 `origin`）
 - Branch 前綴（預設 `feature/hermes-`）
+- **GitHub Personal Access Token（`repo` scope，必填）** — 在 https://github.com/settings/tokens 建立；`ensure-repo` 自動建立/連結 repo 及後續 `git-commit --push` 驗證都需要
 
 執行：
 ```bash
@@ -53,10 +54,13 @@ python scripts/cli.py config set \
   --email "user@company.com" \
   --token "YOUR_API_TOKEN" \
   --project "PROJ" \
+  --github-token "YOUR_GITHUB_PAT" \
   --git-repo "/path/to/local/repo" \
   --git-remote "origin" \
   --branch-prefix "feature/hermes-"
 ```
+
+若使用者沒有現成的 Git repo（多數情況），可省略 `--git-repo`；`ensure-repo`（步驟五）會自動幫每個 Epic/ticket 建立新 repo 並連結。
 
 測試連線：
 ```bash
@@ -192,7 +196,27 @@ python scripts/cli.py check-feedback \
 
 ### 步驟五：實作程式碼
 
-確認目標 repo 路徑（從 config 或詢問使用者）。
+**先確認 root ticket（通常是 Epic）是否已連結 GitHub repo：**
+
+```bash
+python scripts/cli.py ensure-repo --tickets /tmp/ja-tickets.json
+```
+
+CLI 行為：
+1. 檢查 root ticket 上是否已有 Hermes 建立的 repo 連結（Jira remote link）。
+2. **已連結** → clone 該 repo 到本地 workspace（若尚未 clone 過），直接使用。
+3. **未連結** → 自動在 GitHub 建立一個新 repo（預設 private，名稱由 ticket key + summary 產生），clone 到本地，並把 repo URL 以 remote link 的形式連結回該 ticket。
+
+輸出 JSON 範例：
+```json
+{
+  "repos": [
+    {"ticket": "PROJ-42", "repo_url": "https://github.com/alex85279/proj-42-user-auth", "local_path": "/home/hermes/.hermes/jira-architect/repos/proj-42-user-auth", "created": true}
+  ]
+}
+```
+
+**記錄 `local_path`**（每個 root ticket 對應一個 repo）供本步驟後續使用；`created: true` 時告知使用者已自動建立並連結新 repo。若 config 中沒有設定 `--git-repo`，一律以此步驟取得的 `local_path` 作為實作目標。
 
 **決定 branch 名稱：**
 
@@ -201,10 +225,10 @@ python scripts/cli.py check-feedback \
 
 **你直接在 repo 目錄中建立/修改程式碼文件**，根據架構設計的「實作計畫」逐步完成。
 
-實作完成後，執行：
+實作完成後，執行（`--repo` 用步驟五開頭 `ensure-repo` 回傳的 `local_path`）：
 ```bash
 python scripts/cli.py git-commit \
-  --repo "/path/to/repo" \
+  --repo "{local_path}" \
   --branch "feature/hermes-PROJ-42-user-auth" \
   --message "feat(PROJ-42): implement user authentication system
 
@@ -214,6 +238,8 @@ python scripts/cli.py git-commit \
 - Unit tests for auth handlers" \
   --push
 ```
+
+`--push` 會自動使用 config 中的 GitHub token 驗證（token 只透過單次指令的 `-c http.extraheader` 傳遞，不會寫入 `.git/config`）。
 
 CLI 輸出 JSON 格式的 Git 資訊，包含 `commit_hash`、`commit_short`、`branch`、`repo_url`、`commit_url`。
 **記錄這些值**供步驟六使用。
@@ -320,8 +346,10 @@ Hermes 會：
 |------|---------|
 | Jira 401 Unauthorized | Token 或 Email 錯誤 → 請使用者重新 `config set` |
 | Jira 404 Issue not found | Ticket key 錯誤 → 請使用者確認 key |
+| `ensure-repo` 報錯缺少 GitHub token | 請使用者到 https://github.com/settings/tokens 建立 PAT（`repo` scope），並執行 `config set --github-token ...` |
+| GitHub 建立 repo 失敗（401/403） | GitHub token 無效或缺少 `repo` scope → 請使用者重新產生 token 並更新 config |
 | Git push 失敗（non-fast-forward） | 需先 `git pull --rebase`，告知使用者手動解決後再試 |
-| Git repo 路徑未設定 | 詢問使用者提供路徑，或用 `config set --git-repo` |
+| Git repo 路徑未設定 | 執行 `ensure-repo` 自動取得/建立，或用 `config set --git-repo` 指定既有路徑 |
 | Nothing to commit | 實作後無文件變更 → 請確認文件是否已正確寫入 repo 目錄 |
 | 沒有新 feedback | 告知使用者目前無 `@hermes` 回饋，提醒使用協議留言 |
 
@@ -335,8 +363,9 @@ scripts/
 ├── poll.py                         — cron 定時 polling 腳本（每 2h 執行）
 └── jira_architect/
     ├── config.py                   — 設定讀寫（~/.hermes/jira-architect.json）
-    ├── jira_client.py              — Jira REST API v3 client（fetch、comment、ADF）
-    ├── git_client.py               — Git 操作 wrapper（branch、commit、push）
+    ├── jira_client.py              — Jira REST API v3 client（fetch、comment、ADF、remote link）
+    ├── github_client.py            — GitHub REST API client（建立 repo、查詢）
+    ├── git_client.py               — Git 操作 wrapper（clone、branch、commit、push，token 驗證）
     ├── models.py                   — Pydantic 資料模型
     ├── feedback.py                 — @hermes 指令解析器
     ├── progress.py                 — 進度/設計留言格式化器
