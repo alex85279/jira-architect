@@ -248,7 +248,9 @@ CLI 輸出 JSON 格式的 Git 資訊，包含 `commit_hash`、`commit_short`、`
 
 ### 步驟六：更新所有 Jira Tickets 進度
 
-使用步驟五取得的 Git 資訊，在**所有相關 tickets**（Epic + Story + Sub-task）貼上進度留言：
+使用步驟五取得的 Git 資訊，在**所有相關 tickets**（Epic + Story + Sub-task）貼上進度留言。
+
+**每個 ticket 必須有自己專屬的更新訊息**，說明該 ticket 具體完成了什麼。使用 `--summaries` 傳入 JSON 物件：
 
 ```bash
 python scripts/cli.py update-progress \
@@ -256,10 +258,18 @@ python scripts/cli.py update-progress \
   --repo-url "https://github.com/company/repo" \
   --commit "a1b2c3d4e5f6789abcdef..." \
   --branch "feature/hermes-PROJ-42-user-auth" \
-  --summary "實作了使用者認證系統。包含 JWT token 管理（access token 30 分鐘、refresh token 7 天）、Email/password 登入 API（POST /api/auth/login）、登出 API（POST /api/auth/logout），以及完整的 input validation middleware。所有單元測試通過（15/15）。"
+  --summaries '{
+    "PROJ-42": "完成 Epic 整體進度：使用者認證系統主幹架構實作完成，子任務全部進入 Done。",
+    "PROJ-43": "實作 JWT token 管理模組。支援 access token（30 分鐘）與 refresh token（7 天），附帶 token 輪換機制。",
+    "PROJ-44": "完成登入 / 登出 API（POST /api/auth/login、POST /api/auth/logout），含完整 input validation middleware。所有單元測試通過（15/15）。"
+  }'
 ```
 
-每個 ticket 都會收到包含 Git 資訊與摘要的標準化留言，並附上 `@hermes` 回饋指引。
+- `--summaries` 接受 JSON 字串或檔案路徑（`@/tmp/summaries.json`）
+- 若某個 ticket key 未出現在 `--summaries` 中，會 fallback 到 `--summary`（全域訊息）
+- 若兩者都未提供，該 ticket 會被跳過（輸出會顯示 `⏭ Skipped`）
+
+**規則**：每個 ticket 的訊息只描述**該 ticket 自身**的工作（不要把 Epic 的訊息複製給 sub-task）。
 
 更新 session phase 為 `awaiting_impl`（讓 cron 繼續 polling 等待 code review 回饋）：
 ```bash

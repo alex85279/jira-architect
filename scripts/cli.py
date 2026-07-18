@@ -350,6 +350,27 @@ def cmd_git_commit(args) -> None:
 # update-progress
 # ---------------------------------------------------------------------------
 
+def _load_summaries(arg: str) -> dict:
+    """Parse --summaries value: JSON string or @/path/to/file → Dict[str, str]."""
+    if not arg:
+        return {}
+    val = arg.strip()
+    if val.startswith("@"):
+        path = Path(val[1:]).expanduser()
+        val = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(val)
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: --summaries is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+        return {}
+    if not isinstance(data, dict):
+        print("ERROR: --summaries must be a JSON object mapping ticket keys to summaries.",
+              file=sys.stderr)
+        sys.exit(1)
+    return data
+
+
 def cmd_update_progress(args) -> None:
     cfg = _require_config()
     client = JiraClient(cfg)
@@ -363,16 +384,26 @@ def cmd_update_progress(args) -> None:
         commit_url=args.commit_url,
     )
 
-    comment_text = build_progress_comment(args.summary, git_info)
+    # Per-ticket summaries override the global --summary fallback
+    per_ticket: dict = _load_summaries(args.summaries or "")
+    global_summary: str = args.summary or ""
 
     posted = []
+    skipped = []
     for issue in tree["issues"]:
-        comment_id = client.add_comment(issue["key"], comment_text)
-        posted.append({"ticket": issue["key"], "comment_id": comment_id})
-        print(f"✅ Updated {issue['key']}: {issue['summary'][:60]}")
+        key = issue["key"]
+        summary = per_ticket.get(key) or global_summary
+        if not summary:
+            skipped.append(key)
+            print(f"⏭  Skipped {key}: no summary provided (use --summary or --summaries)")
+            continue
+        comment_text = build_progress_comment(summary, git_info)
+        comment_id = client.add_comment(key, comment_text)
+        posted.append({"ticket": key, "comment_id": comment_id, "summary": summary[:80]})
+        print(f"✅ Updated {key}: {issue['summary'][:60]}")
 
-    print(f"\nProgress comment posted to {len(posted)} ticket(s).")
-    print(json.dumps({"posted": posted}, ensure_ascii=False, indent=2))
+    print(f"\nProgress comment posted to {len(posted)} ticket(s){f', skipped {len(skipped)}' if skipped else ''}.")
+    print(json.dumps({"posted": posted, "skipped": skipped}, ensure_ascii=False, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +579,10 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--repo-url", required=True, help="Git repo web URL")
     up.add_argument("--commit", required=True, help="Full commit hash")
     up.add_argument("--branch", required=True, help="Branch name")
-    up.add_argument("--summary", required=True, help="Plain-text progress summary")
+    up.add_argument("--summary", default=None,
+                    help="Global plain-text progress summary (used for all tickets without a per-ticket entry)")
+    up.add_argument("--summaries", default=None,
+                    help='Per-ticket summaries as JSON object {"KAN-1": "...", "KAN-2": "..."} or @/path/to/file.json')
     up.add_argument("--commit-url", default=None, help="Direct URL to the commit (optional)")
 
     # --- session ---
