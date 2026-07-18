@@ -158,29 +158,32 @@ class JiraClient:
         return self._parse_issue(resp.json())
 
     def fetch_issues_by_jql(self, jql: str, max_results: int = 100) -> List[JiraIssue]:
+        """Fetch issues by JQL using the /rest/api/3/search/jql endpoint (cursor pagination)."""
         issues: List[JiraIssue] = []
-        start = 0
+        next_page_token: Optional[str] = None
         while True:
+            body: Dict[str, Any] = {
+                "jql": jql,
+                "maxResults": min(max_results - len(issues), 50),
+                "fields": ["summary", "description", "issuetype", "status",
+                           "priority", "labels", "assignee", "parent"],
+            }
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
             resp = requests.post(
-                f"{self._base}/issue/search",
+                f"{self._base}/search/jql",
                 headers=self._headers,
-                json={
-                    "jql": jql,
-                    "startAt": start,
-                    "maxResults": min(max_results - len(issues), 50),
-                    "fields": ["summary", "description", "issuetype", "status",
-                               "priority", "labels", "assignee", "parent"],
-                },
+                json=body,
                 timeout=20,
             )
             resp.raise_for_status()
             data = resp.json()
             batch = [self._parse_issue(i) for i in data.get("issues", [])]
             issues.extend(batch)
-            if len(issues) >= data.get("total", 0) or not batch:
+            if data.get("isLast", True) or not batch or len(issues) >= max_results:
                 break
-            start += len(batch)
-            if len(issues) >= max_results:
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token:
                 break
         return issues
 
