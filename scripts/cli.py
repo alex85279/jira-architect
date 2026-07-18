@@ -56,7 +56,7 @@ def cmd_config_set(args) -> None:
         github_token=args.github_token,
         workspace_dir=args.workspace_dir,
     )
-    print(f"Config saved to {cfg_mod.CONFIG_PATH}")
+    print(f"Config saved to {cfg_mod._config_path()}")
 
 
 def cmd_config_show(args) -> None:

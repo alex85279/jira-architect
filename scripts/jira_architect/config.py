@@ -1,16 +1,36 @@
 """Jira + Git config for jira-architect, stored at ~/.hermes/jira-architect.json.
 
 Credentials are stored with owner-only file permissions (chmod 600).
+
+Config path resolution order:
+  1. $HERMES_HOME/.hermes/jira-architect.json  (Hermes gateway runtime)
+  2. $HOME/.hermes/jira-architect.json          (docker exec / local dev)
+
+GitHub token resolution order (inside load()):
+  1. github_token field in the JSON config file
+  2. $GITHUB_TOKEN environment variable
+  3. $GH_TOKEN environment variable
+  4. $GITHUB_PAT environment variable
 """
 from __future__ import annotations
 
 import json
+import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-CONFIG_PATH = Path.home() / ".hermes" / "jira-architect.json"
+
+def _config_path() -> Path:
+    """Return the config file path, respecting HERMES_HOME runtime env."""
+    base = os.environ.get("HERMES_HOME")
+    if base:
+        return Path(base) / ".hermes" / "jira-architect.json"
+    return Path.home() / ".hermes" / "jira-architect.json"
+
+
+CONFIG_PATH = _config_path()
 
 
 @dataclass
@@ -29,10 +49,18 @@ class ArchitectConfig:
 
 def load() -> Optional[ArchitectConfig]:
     """Return config or None if not configured yet."""
-    if not CONFIG_PATH.exists():
+    path = _config_path()
+    if not path.exists():
         return None
     try:
-        data = json.loads(CONFIG_PATH.read_text())
+        data = json.loads(path.read_text())
+        # GitHub token: JSON config → env var fallbacks
+        github_token = (
+            data.get("github_token")
+            or os.environ.get("GITHUB_TOKEN")
+            or os.environ.get("GH_TOKEN")
+            or os.environ.get("GITHUB_PAT")
+        )
         return ArchitectConfig(
             url=data["url"].rstrip("/"),
             email=data["email"],
@@ -42,11 +70,11 @@ def load() -> Optional[ArchitectConfig]:
             git_remote=data.get("git_remote", "origin"),
             branch_prefix=data.get("branch_prefix", "feature/hermes-"),
             discord_webhook_url=data.get("discord_webhook_url"),
-            github_token=data.get("github_token"),
+            github_token=github_token,
             workspace_dir=data.get("workspace_dir", "~/.hermes/jira-architect/repos"),
         )
     except (KeyError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Malformed config at {CONFIG_PATH}: {exc}") from exc
+        raise RuntimeError(f"Malformed config at {path}: {exc}") from exc
 
 
 def save(
@@ -62,8 +90,9 @@ def save(
     workspace_dir: Optional[str] = None,
 ) -> None:
     """Persist config with owner-only read/write permissions."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
         json.dumps(
             {
                 "url": url.rstrip("/"),
@@ -80,4 +109,4 @@ def save(
             indent=2,
         )
     )
-    CONFIG_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
